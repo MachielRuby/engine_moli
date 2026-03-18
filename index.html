@@ -188,9 +188,8 @@
     dirLight.position.set(1, 2, 1);
     scene3d.add(dirLight);
 
-    // modelMap: { [name]: THREE.Group }
     var modelMap     = {};
-    var modelLoading = {};  // 防止重复加载
+    var modelLoading = {};  
 
     function normalizeAndCenter(obj) {
       var box = new THREE.Box3().setFromObject(obj);
