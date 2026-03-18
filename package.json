@@ -2,24 +2,18 @@
   "name": "engine",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/MachielRuby/engine_test.git"
-  },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "module",
-  "bugs": {
-    "url": "https://github.com/MachielRuby/engine_test/issues"
+  "engines": {
+    "node": ">=18.0.0"
   },
-  "homepage": "https://github.com/MachielRuby/engine_test#readme",
   "devDependencies": {
     "vite": "^6.3.1",
     "vite-plugin-static-copy": "^3.3.0"
