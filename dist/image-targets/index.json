@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "updatedAt": "2026-03-17T00:00:00.000Z",
+  "targets": [
+    {
+      "id": "01",
+      "name": "01",
+      "displayName": "Target 01",
+      "matchImageUrl": "/image-targets/01/01_luminance.jpg",
+      "metadataUrl": "/image-targets/01/01.json",
+      "modelUrl": "/models/01.glb",
+      "referenceSize": {
+        "width": 536,
+        "height": 750
+      },
+      "xrProperties": {
+        "left": 0,
+        "top": 18,
+        "width": 536,
+        "height": 715,
+        "isRotated": true,
+        "originalWidth": 536,
+        "originalHeight": 750
+      }
+    },
+    {
+      "id": "02",
+      "name": "02",
+      "displayName": "Target 02",
+      "matchImageUrl": "https://github.com/MachielRuby/engine_test/blob/main/02_luminance.jpg",
+      "metadataUrl": "/image-targets/02/02.json",
+      "modelUrl": "/models/02.glb",
+      "referenceSize": {
+        "width": 1279,
+        "height": 2275
+      },
+      "xrProperties": {
+        "left": 0,
+        "top": 285,
+        "width": 1279,
+        "height": 1705,
+        "isRotated": false,
+        "originalWidth": 1279,
+        "originalHeight": 2275
+      }
+    }
+  ]
+}

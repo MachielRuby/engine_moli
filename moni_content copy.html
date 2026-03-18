@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Dynamic AR Demo</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+
+    #camerafeed {
+      position: fixed; top: 0; left: 0;
+      width: 100%; height: 100%;
+      background: #000; z-index: 0;
+    }
+    #overlay3d {
+      position: fixed; top: 0; left: 0;
+      width: 100%; height: 100%;
+      pointer-events: none; background: transparent; z-index: 1;
+    }
+    #info {
+      position: fixed; top: 12px; left: 12px; right: 12px;
+      background: rgba(0,0,0,.72);
+      color: #fff;
+      border-radius: 12px;
+      padding: 12px 16px;
+      font: 14px/1.5 "Segoe UI", Arial, sans-serif;
+      z-index: 10;
+      transition: background .3s;
+    }
+    #info.found { background: rgba(8,110,48,.82); }
+    #info.lost  { background: rgba(0,0,0,.72); }
+    #statusLine { font-weight: 600; margin-bottom: 4px; }
+    #debugLine  { font-size: 12px; opacity: .78; }
+  </style>
+</head>
+<body>
+  <canvas id="camerafeed"></canvas>
+  <canvas id="overlay3d"></canvas>
+
+  <div id="info">
+    <div id="statusLine">正在加载目标图库...</div>
+    <div id="debugLine">-</div>
+  </div>
+
+  <!-- Three.js -->
+  <script src="https://unpkg.com/three@0.137.0/build/three.min.js"></script>
+  <script src="https://unpkg.com/three@0.137.0/examples/js/loaders/DRACOLoader.js"></script>
+  <script src="https://unpkg.com/three@0.137.0/examples/js/loaders/GLTFLoader.js"></script>
+
+  <!-- XR8 引擎（本地） -->
+  <script src="./xr-standalone/xr.js" data-preload-chunks="slam"></script>
+
+  <script>
+    var MOCK_BACKEND_RESPONSE = {
+      "targets": [
+        {
+          "name": "01",
+          "matchImageUrl": "https://raw.githubusercontent.com/MachielRuby/engine_test/refs/heads/main/01_luminance.jpg",
+          "modelUrl": "https://raw.githubusercontent.com/MachielRuby/engine_test/main/01.glb",
+          "xrProperties": {
+            "left": 0, "top": 18,
+            "width": 536, "height": 715,
+            "isRotated": true,
+            "originalWidth": 536, "originalHeight": 750
+          }
+        },
+        {
+          "name": "021221",
+          "matchImageUrl": "https://raw.githubusercontent.com/MachielRuby/engine_test/main/image-targets/02/02_luminance.jpg",
+          "modelUrl": "https://raw.githubusercontent.com/MachielRuby/engine_test/main/02.glb",
+          "xrProperties": {
+            "left": 0, "top": 285,
+            "width": 1279, "height": 1705,
+            "isRotated": false,
+            "originalWidth": 1279, "originalHeight": 2275
+          }
+        }
+      ]
+    };
+
+    // ─── DOM ────────────────────────────────────────────────────────────────
+    var canvas       = document.getElementById('camerafeed');
+    var overlayCanvas= document.getElementById('overlay3d');
+    var info         = document.getElementById('info');
+    var statusLine   = document.getElementById('statusLine');
+    var debugLine    = document.getElementById('debugLine');
+
+    function setStatus(text, tone) {
+      statusLine.textContent = text;
+      info.className = tone || '';
+    }
+    function setDebug(text) {
+      debugLine.textContent = text || '-';
+    }
+
+    // ─── Viewport 同步 ──────────────────────────────────────────────────────
+    var renderer3d = null;
+    var camera3d   = null;
+
+    function syncViewport() {
+      var dpr = window.devicePixelRatio || 1;
+      var w   = window.innerWidth;
+      var h   = window.innerHeight;
+      canvas.width  = w * dpr; canvas.height  = h * dpr;
+      canvas.style.width = w + 'px'; canvas.style.height = h + 'px';
+      overlayCanvas.width  = w * dpr; overlayCanvas.height  = h * dpr;
+      overlayCanvas.style.width = w + 'px'; overlayCanvas.style.height = h + 'px';
+      if (renderer3d) {
+        renderer3d.setSize(w * dpr, h * dpr, false);
+        renderer3d.setViewport(0, 0, w * dpr, h * dpr);
+      }
+      if (camera3d) {
+        camera3d.aspect = w / h;
+        camera3d.updateProjectionMatrix();
+        camera3d.updateMatrixWorld(true);
+      }
+    }
+    syncViewport();
+    window.addEventListener('resize', syncViewport);
+    window.addEventListener('orientationchange', function() {
+      setTimeout(syncViewport, 50);
+      requestAnimationFrame(syncViewport);
+    });
+
+    // ─── 设备方向模拟（XR8 需要） ────────────────────────────────────────────
+    (function() {
+      var realC8 = null;
+      Object.defineProperty(window, '_c8', {
+        get: function() { return realC8; },
+        set: function(obj) {
+          realC8 = obj;
+          if (obj && typeof obj === 'object') {
+            Object.defineProperty(obj, 'checkAllZeroes', {
+              get: function() { return 0; },
+              set: function() {},
+              configurable: true, enumerable: true
+            });
+          }
+        },
+        configurable: true, enumerable: true
+      });
+      var t = 0;
+      setInterval(function() {
+        t += 0.05;
+        try {
+          window.dispatchEvent(new DeviceOrientationEvent('deviceorientation', {
+            alpha: 0.1 + Math.sin(t) * 0.5,
+            beta:  90  + Math.sin(t * 1.3) * 2,
+            gamma: Math.cos(t * 0.7) * 1
+          }));
+        } catch(e) {}
+      }, 16);
+    })();
+
+    // 第一步：解析后台直接推送来的 JSON 内容 
+    function parseBackendData(data) {
+      if (!data || !Array.isArray(data.targets)) {
+        throw new Error('后台数据格式不正确，缺少 targets 数组');
+      }
+      
+      return data.targets.map(function(t) {
+        return {
+          // XR8 识别需要的字段
+          name:       t.name || t.id,
+          imagePath:  t.matchImageUrl,
+          type:       'PLANAR',
+          metadata:   null,
+          properties: t.xrProperties || null,
+
+          // 我们自己需要的字段
+          modelUrl:   t.modelUrl,
+        };
+      });
+    }
+
+    // ─── Three.js 场景 ───────────────────────────────────────────────────────
+    var scene3d = new THREE.Scene();
+    renderer3d = new THREE.WebGLRenderer({ canvas: overlayCanvas, alpha: true, antialias: true });
+    renderer3d.setClearColor(0x000000, 0);
+    renderer3d.setSize(overlayCanvas.width, overlayCanvas.height, false);
+    camera3d = new THREE.PerspectiveCamera(60, overlayCanvas.width / overlayCanvas.height, 0.01, 1000);
+    scene3d.add(camera3d);
+    syncViewport();
+
+    scene3d.add(new THREE.AmbientLight(0xffffff, 0.9));
+    var dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
+    dirLight.position.set(1, 2, 1);
+    scene3d.add(dirLight);
+
+    // modelMap: { [name]: THREE.Group }
+    var modelMap     = {};
+    var modelLoading = {};  // 防止重复加载
+
+    function normalizeAndCenter(obj) {
+      var box = new THREE.Box3().setFromObject(obj);
+      var size = new THREE.Vector3(), center = new THREE.Vector3();
+      box.getSize(size); box.getCenter(center);
+      var maxDim = Math.max(size.x, size.y, size.z);
+      if (maxDim > 0) {
+        var s = 1 / maxDim;
+        obj.scale.multiplyScalar(s);
+        obj.position.set(-center.x * s, -center.y * s, -center.z * s);
+      }
+    }
+
+    var dracoLoader = new THREE.DRACOLoader();
+    dracoLoader.setDecoderPath('https://unpkg.com/three@0.137.0/examples/js/libs/draco/');
+    var gltfLoader = new THREE.GLTFLoader();
+    gltfLoader.setDRACOLoader(dracoLoader);
+
+    // 按需懒加载模型
+    function ensureModelLoaded(targetName, modelUrl, onReady) {
+      if (modelMap[targetName]) {
+        onReady(modelMap[targetName]);
+        return;
+      }
+      if (modelLoading[targetName]) return; // 已在加载中
+      modelLoading[targetName] = true;
+
+      gltfLoader.load(modelUrl, function(gltf) {
+        normalizeAndCenter(gltf.scene);
+        var group = new THREE.Group();
+        group.add(gltf.scene);
+        group.visible = false;
+        scene3d.add(group);
+        modelMap[targetName] = group;
+        onReady(group);
+      }, undefined, function(err) {
+        console.error('[AR] 加载模型失败:', targetName, err);
+        modelLoading[targetName] = false; // 允许重试
+      });
+    }
+
+    function placeModel(detail, modelUrl) {
+      ensureModelLoaded(detail.name, modelUrl, function(group) {
+        group.position.set(detail.position.x, detail.position.y, detail.position.z);
+        group.quaternion.set(detail.rotation.x, detail.rotation.y, detail.rotation.z, detail.rotation.w);
+        group.scale.set(detail.scale, detail.scale, detail.scale);
+        group.visible = true;
+      });
+    }
+
+    function hideModel(name) {
+      var group = modelMap[name];
+      if (group) group.visible = false;
+    }
+
+    function hideAllModels() {
+      Object.keys(modelMap).forEach(function(name) {
+        if (modelMap[name]) modelMap[name].visible = false;
+      });
+    }
+
+    function syncCamera(processCpuResult) {
+      var reality = processCpuResult.reality;
+      if (!reality) return;
+      if (reality.intrinsics) {
+        for (var i = 0; i < 16; i++) {
+          camera3d.projectionMatrix.elements[i] = reality.intrinsics[i];
+        }
+        if (camera3d.projectionMatrixInverse) {
+          camera3d.projectionMatrixInverse.copy(camera3d.projectionMatrix).invert();
+        }
+      }
+      if (reality.rotation) camera3d.setRotationFromQuaternion(reality.rotation);
+      if (reality.position) camera3d.position.set(reality.position.x, reality.position.y, reality.position.z);
+      camera3d.updateMatrixWorld(true);
+    }
+
+    // ─── 启动 AR ─────────────────────────────────────────────────────────────
+    function startAR(targets) {
+      // targets 是从"后台"拉来的，包含 XR8 格式 + 我们自己需要的 modelUrl
+      // 先把 XR8 只需要的字段分离出来
+      var xrTargets = targets.map(function(t) {
+        return {
+          name:       t.name,
+          imagePath:  t.imagePath,
+          type:       t.type,
+          metadata:   t.metadata,
+          properties: t.properties,
+        };
+      });
+
+      // name -> modelUrl 的查找表
+      var modelUrlMap = {};
+      targets.forEach(function(t) { modelUrlMap[t.name] = t.modelUrl; });
+
+      setStatus('引擎启动中...', '');
+      setDebug('已加载 ' + targets.length + ' 个目标图');
+
+      XR8.addCameraPipelineModules([
+        XR8.GlTextureRenderer.pipelineModule(),
+        XR8.XrController.pipelineModule(),
+        {
+          name: 'dynamic-ar-app',
+          onStart: function() {
+            syncViewport();
+            requestAnimationFrame(syncViewport);
+            setTimeout(syncViewport, 50);
+            setStatus('摄像头就绪，对准目标图', '');
+            setDebug('共 ' + targets.length + ' 个可识别目标');
+          },
+          onUpdate: function(e) {
+            if (e.processCpuResult) syncCamera(e.processCpuResult);
+            renderer3d.setSize(overlayCanvas.width, overlayCanvas.height, false);
+            camera3d.aspect = overlayCanvas.width / overlayCanvas.height;
+            camera3d.updateProjectionMatrix();
+            renderer3d.clear();
+            renderer3d.render(scene3d, camera3d);
+          },
+          listeners: [
+            {
+              // XR8 引擎识别到目标图后自动触发
+              // e.detail.name 就是你在 index.json 里配置的 name 字段
+              // 不是你写死的，是 XR8 底层匹配后告诉你的
+              event: 'reality.imagefound',
+              process: function(e) {
+                var name     = e.detail.name;
+                var modelUrl = modelUrlMap[name];
+                console.log('=== 识别到目标！===');
+                console.log('目标名称:', name);
+                console.log('完整事件:', e.detail);
+
+                setStatus('识别到: ' + name, 'found');
+                setDebug('模型: ' + (modelUrl || '未配置'));
+
+                if (modelUrl) {
+                  placeModel(e.detail, modelUrl);
+                }
+              }
+            },
+            {
+              event: 'reality.imageupdated',
+              process: function(e) {
+                var name     = e.detail.name;
+                var modelUrl = modelUrlMap[name];
+                if (modelUrl) placeModel(e.detail, modelUrl);
+              }
+            },
+            {
+              event: 'reality.imagelost',
+              process: function(e) {
+                var name = e.detail.name;
+                console.log('目标丢失:', name);
+                setStatus('目标丢失，继续扫描...', 'lost');
+                setDebug('-');
+                hideModel(name);
+              }
+            }
+          ]
+        }
+      ]);
+
+      XR8.XrController.configure({
+        disableWorldTracking: true,
+        imageTargetData: xrTargets,   // 动态拉来的，不是写死的
+      });
+
+      XR8.run({
+        canvas: canvas,
+        allowedDevices: XR8.XrConfig.device().ANY,
+        cameraConfig: { direction: XR8.XrConfig.camera().BACK }
+      });
+    }
+
+    // ─── 主流程 ───────────────────────────────────────────────────────────────
+    // 1. 接收后台直接推送来的 JSON 内容（不再 fetch 文件）
+    // 2. 解析成 XR8 需要的格式
+    // 3. XR8 引擎加载完成后启动 AR
+    //
+    // 真实后台接入时，把 receiveBackendData(MOCK_BACKEND_RESPONSE) 这一行
+    // 换成你实际接收数据的方式，比如：
+    //   WebSocket:   socket.on('targets', receiveBackendData)
+    //   HTTP 响应:   fetch('/api/targets').then(r=>r.json()).then(receiveBackendData)
+    //   页面注入:    receiveBackendData(window.__BACKEND_DATA__)
+
+    function receiveBackendData(data) {
+      var targets;
+      try {
+        targets = parseBackendData(data);
+      } catch (err) {
+        console.error('[AR] 解析后台数据失败:', err);
+        setStatus('数据解析失败: ' + err.message, '');
+        return;
+      }
+
+      var valid = targets.filter(function(t) {
+        return t.name && t.imagePath && t.properties && t.modelUrl;
+      });
+
+      if (valid.length === 0) {
+        setStatus('目标图库为空或数据不完整', '');
+        setDebug('检查 matchImageUrl、modelUrl、xrProperties 是否都有值');
+        return;
+      }
+
+      setStatus('收到 ' + valid.length + ' 个目标，等待 XR8 引擎...', '');
+      setDebug('targets: ' + valid.map(function(t) { return t.name; }).join(', '));
+
+      if (window.XR8) {
+        startAR(valid);
+      } else {
+        window.addEventListener('xrloaded', function() {
+          startAR(valid);
+        });
+      }
+    }
+
+    // 模拟后台推送数据（直接把 JSON 对象传进来，不经过网络请求）
+    receiveBackendData(MOCK_BACKEND_RESPONSE);
+  </script>
+</body>
+</html>

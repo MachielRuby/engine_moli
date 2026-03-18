@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Image Target Demo</title>
+  <style>
+    *{margin:0;padding:0}
+    html,body{width:100%;height:100%;overflow:hidden}
+    #camerafeed{position:fixed;top:0;left:0;width:100%;height:100%;background:#000;z-index:0}
+    #overlay3d{position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;background:transparent;z-index:1}
+    #info{position:fixed;top:10px;left:10px;right:10px;background:rgba(0,0,0,.7);color:#fff;border-radius:8px;padding:12px;font:14px/1.4 sans-serif;z-index:10}
+  </style>
+</head>
+<body>
+  <canvas id="camerafeed"></canvas>
+  <canvas id="overlay3d"></canvas>
+  <div id="info">Loading...</div>
+
+  <!-- Three.js r137 -->
+  <script src="https://unpkg.com/three@0.137.0/build/three.min.js"></script>
+  <script src="https://unpkg.com/three@0.137.0/examples/js/loaders/DRACOLoader.js"></script>
+  <script src="https://unpkg.com/three@0.137.0/examples/js/loaders/GLTFLoader.js"></script>
+
+  <script>
+    var canvas = document.getElementById('camerafeed');
+    var overlayCanvas = document.getElementById('overlay3d');
+    var renderer3d = null;
+    var camera3d = null;
+
+    function syncViewport() {
+      var dpr = window.devicePixelRatio || 1;
+      var w = window.innerWidth;
+      var h = window.innerHeight;
+
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
+      overlayCanvas.width = w * dpr;
+      overlayCanvas.height = h * dpr;
+      canvas.style.width = w + 'px';
+      canvas.style.height = h + 'px';
+      overlayCanvas.style.width = w + 'px';
+      overlayCanvas.style.height = h + 'px';
+
+      if (renderer3d) {
+        renderer3d.setSize(w * dpr, h * dpr, false);
+        renderer3d.setViewport(0, 0, w * dpr, h * dpr);
+      }
+      if (camera3d) {
+        camera3d.aspect = w / h;
+        camera3d.updateProjectionMatrix();
+        camera3d.updateMatrixWorld(true);
+      }
+    }
+
+    syncViewport();
+    window.addEventListener('resize', syncViewport);
+    window.addEventListener('orientationchange', function() {
+      setTimeout(syncViewport, 50);
+      requestAnimationFrame(syncViewport);
+    });
+  </script>
+  <script>
+    (function() {
+      var realC8 = null;
+      Object.defineProperty(window, '_c8', {
+        get: function() { return realC8; },
+        set: function(obj) {
+          realC8 = obj;
+          if (obj && typeof obj === 'object') {
+            Object.defineProperty(obj, 'checkAllZeroes', {
+              get: function() { return 0; },
+              set: function() {},
+              configurable: true, enumerable: true
+            });
+          }
+        },
+        configurable: true, enumerable: true
+      });
+
+      var t = 0;
+      setInterval(function() {
+        t += 0.05;
+        try {
+          window.dispatchEvent(new DeviceOrientationEvent('deviceorientation', {
+            alpha: 0.1 + Math.sin(t) * 0.5,
+            beta: 90 + Math.sin(t * 1.3) * 2,
+            gamma: Math.cos(t * 0.7) * 1
+          }));
+        } catch(e) {}
+      }, 16);
+    })();
+  </script>
+
+  <script src="./xr-standalone/xr.js" data-preload-chunks="slam"></script>
+
+  <script>
+    var info = document.getElementById('info');
+
+    // ---- Three.js 场景（透明覆盖层）----
+    renderer3d = new THREE.WebGLRenderer({ canvas: overlayCanvas, alpha: true, antialias: true });
+    renderer3d.setClearColor(0x000000, 0);
+    renderer3d.setSize(overlayCanvas.width, overlayCanvas.height, false);
+
+    var scene3d = new THREE.Scene();
+    camera3d = new THREE.PerspectiveCamera(60, overlayCanvas.width / overlayCanvas.height, 0.01, 1000);
+    scene3d.add(camera3d);
+    syncViewport();
+
+    // 灯光
+    scene3d.add(new THREE.AmbientLight(0xffffff, 0.8));
+    var dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
+    dirLight.position.set(1, 2, 1);
+    scene3d.add(dirLight);
+
+    var modelGroup = null;
+
+    // 加载模型
+    (function() {
+      var dracoLoader = new THREE.DRACOLoader();
+      dracoLoader.setDecoderPath('https://unpkg.com/three@0.137.0/examples/js/libs/draco/');
+      var loader = new THREE.GLTFLoader();
+      loader.setDRACOLoader(dracoLoader);
+      loader.load('./models/01.glb', function(gltf) {
+        modelGroup = new THREE.Group();
+        modelGroup.add(gltf.scene);
+        modelGroup.visible = false;
+        scene3d.add(modelGroup);
+        console.log('[DEBUG] Model 01.glb loaded');
+        info.textContent = 'Model loaded. Point at target.';
+      }, undefined, function(err) {
+        console.error('[DEBUG] Failed to load model:', err);
+        info.textContent = 'Model load failed!';
+      });
+    })();
+
+    // 放置模型
+    function placeModel(detail) {
+      if (!modelGroup) return;
+      modelGroup.position.set(detail.position.x, detail.position.y, detail.position.z);
+      modelGroup.quaternion.set(detail.rotation.x, detail.rotation.y, detail.rotation.z, detail.rotation.w);
+      modelGroup.scale.set(detail.scale, detail.scale, detail.scale);
+      modelGroup.visible = true;
+    }
+
+    // 同步 XR8 相机投影到 Three.js 相机
+    function syncCamera(processCpuResult) {
+      var reality = processCpuResult.reality;
+      if (!reality) return;
+      var intrinsics = reality.intrinsics;
+      var rot = reality.rotation;
+      var pos = reality.position;
+      if (intrinsics) {
+        for (var i = 0; i < 16; i++) {
+          camera3d.projectionMatrix.elements[i] = intrinsics[i];
+        }
+        if (camera3d.projectionMatrixInverse) {
+          camera3d.projectionMatrixInverse.copy(camera3d.projectionMatrix).invert();
+        }
+      }
+      if (rot) camera3d.setRotationFromQuaternion(rot);
+      if (pos) camera3d.position.set(pos.x, pos.y, pos.z);
+    }
+
+    // ---- 图像目标数据 ----
+    var targets = [{
+      name: '01',
+      imagePath: './image-targets/01/01_luminance.jpg',
+      type: 'PLANAR',
+      metadata: null,
+      properties: {
+        left: 0, top: 18, width: 536, height: 715,
+        isRotated: true, originalWidth: 536, originalHeight: 750
+      }
+    }];
+
+    function startAR() {
+      info.textContent = 'Engine loaded, starting...';
+
+      XR8.addCameraPipelineModules([
+        XR8.GlTextureRenderer.pipelineModule(),   // 摄像头画面
+        XR8.XrController.pipelineModule(),
+        {
+          name: 'app',
+          onStart: function() {
+            // XR8 启动后补一次视口同步，避免只有打开 DevTools 时才触发重排
+            syncViewport();
+            requestAnimationFrame(syncViewport);
+            setTimeout(syncViewport, 50);
+            info.textContent = 'Camera ready. Point at target.';
+          },
+          onUpdate: function(e) {
+            // 每帧同步相机 + 渲染 Three.js 覆盖层
+            if (e.processCpuResult) {
+              syncCamera(e.processCpuResult);
+            }
+            // 这个 standalone 版本在首次进入扫描时经常尺寸未完全稳定，
+            // 每帧同步一次 renderer/camera 尺寸，避免必须靠 DevTools 触发重排。
+            renderer3d.setSize(overlayCanvas.width, overlayCanvas.height, false);
+            camera3d.aspect = overlayCanvas.width / overlayCanvas.height;
+            camera3d.updateProjectionMatrix();
+            renderer3d.clear();
+            renderer3d.render(scene3d, camera3d);
+          },
+          listeners: [
+            { event: 'reality.imagescanning', process: function(e) {
+              var n = e.detail.imageTargets ? e.detail.imageTargets.length : 0;
+              info.textContent = 'Scanning (' + n + ' targets)';
+            }},
+            { event: 'reality.imagefound', process: function(e) {
+              info.textContent = 'FOUND: ' + e.detail.name;
+              info.style.background = 'rgba(0,150,0,.8)';
+              placeModel(e.detail);
+            }},
+            { event: 'reality.imageupdated', process: function(e) {
+              info.textContent = 'Tracking: ' + e.detail.name;
+              placeModel(e.detail);
+            }},
+            { event: 'reality.imagelost', process: function(e) {
+              info.textContent = 'Lost. Scanning...';
+              info.style.background = 'rgba(0,0,0,.7)';
+              if (modelGroup) modelGroup.visible = false;
+            }}
+          ]
+        }
+      ]);
+
+      XR8.XrController.configure({
+        disableWorldTracking: true,
+        imageTargetData: targets
+      });
+
+      XR8.run({
+        canvas: canvas,
+        allowedDevices: XR8.XrConfig.device().ANY,
+        cameraConfig: { direction: XR8.XrConfig.camera().BACK }
+      });
+    }
+
+    if (window.XR8) { startAR(); }
+    else { window.addEventListener('xrloaded', startAR); }
+  </script>
+</body>
+</html>

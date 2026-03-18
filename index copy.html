@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Image Target Demo</title>
+  <style>
+    *{margin:0;padding:0}
+    html,body{width:100%;height:100%;overflow:hidden}
+    #camerafeed{position:fixed;top:0;left:0;width:100%;height:100%;background:#000}
+    #info{position:fixed;top:10px;left:10px;right:10px;background:rgba(0,0,0,.7);color:#fff;border-radius:8px;padding:12px;font:14px/1.4 sans-serif;z-index:10}
+  </style>
+</head>
+<body>
+  <canvas id="camerafeed"></canvas>
+  <div id="info">Loading...</div>
+
+  <script>
+    var canvas = document.getElementById('camerafeed');
+    function resize() {
+      canvas.width = window.innerWidth * (window.devicePixelRatio || 1);
+      canvas.height = window.innerHeight * (window.devicePixelRatio || 1);
+    }
+    resize();
+    window.addEventListener('resize', resize);
+  </script>
+  <script>
+    (function() {
+      var realC8 = null;
+      Object.defineProperty(window, '_c8', {
+        get: function() { return realC8; },
+        set: function(obj) {
+          realC8 = obj;
+          if (obj && typeof obj === 'object') {
+            Object.defineProperty(obj, 'checkAllZeroes', {
+              get: function() { return 0; },
+              set: function() {},
+              configurable: true, enumerable: true
+            });
+          }
+        },
+        configurable: true, enumerable: true
+      });
+
+      var t = 0;
+      setInterval(function() {
+        t += 0.05;
+        try {
+          window.dispatchEvent(new DeviceOrientationEvent('deviceorientation', {
+            alpha: 0.1 + Math.sin(t) * 0.5,
+            beta: 90 + Math.sin(t * 1.3) * 2,
+            gamma: Math.cos(t * 0.7) * 1
+          }));
+        } catch(e) {}
+      }, 16);
+    })();
+  </script>
+
+  <script src="./xr-standalone/xr.js" data-preload-chunks="slam"></script>
+
+  <script>
+    var info = document.getElementById('info');
+
+    var targets = [{
+      name: '01',
+      imagePath: './image-targets/01_luminance.jpg',
+      type: 'PLANAR',
+      metadata: null,
+      properties: {
+        left: 0, top: 18, width: 536, height: 715,
+        isRotated: true, originalWidth: 536, originalHeight: 750
+      }
+    }];
+
+    function startAR() {
+      info.textContent = 'Engine loaded, starting...';
+
+      XR8.addCameraPipelineModules([
+        XR8.GlTextureRenderer.pipelineModule(),
+        XR8.XrController.pipelineModule(),
+        {
+          name: 'app',
+          onStart: function() { info.textContent = 'Camera ready. Point at target.'; },
+          onBeforeSessionInitialize: function(e) {
+            console.log('[DEBUG] sessionAttributes:', JSON.stringify(e.sessionAttributes));
+          },
+          onCameraStatusChange: function(e) {
+            console.log('[DEBUG] cameraStatus:', e.status);
+          },
+          listeners: [
+            { event: 'reality.imagescanning', process: function(e) {
+              var n = e.detail.imageTargets ? e.detail.imageTargets.length : 0;
+              info.textContent = 'Scanning (' + n + ' targets)';
+            }},
+            { event: 'reality.imagefound', process: function(e) {
+              info.textContent = 'FOUND: ' + e.detail.name;
+              info.style.background = 'rgba(0,150,0,.8)';
+            }},
+            { event: 'reality.imageupdated', process: function(e) {
+              info.textContent = 'Tracking: ' + e.detail.name;
+            }},
+            { event: 'reality.imagelost', process: function(e) {
+              info.textContent = 'Lost. Scanning...';
+              info.style.background = 'rgba(0,0,0,.7)';
+            }}
+          ]
+        }
+      ]);
+
+      XR8.XrController.configure({
+        disableWorldTracking: true,
+        imageTargetData: targets
+      });
+
+      XR8.run({
+        canvas: canvas,
+        allowedDevices: XR8.XrConfig.device().ANY,
+        cameraConfig: { direction: XR8.XrConfig.camera().FRONT }
+      });
+    }
+
+    if (window.XR8) { startAR(); }
+    else { window.addEventListener('xrloaded', startAR); }
+  </script>
+</body>
+</html>
