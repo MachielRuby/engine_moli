@@ -27,7 +27,7 @@
       "id": "02",
       "name": "02",
       "displayName": "Target 02",
-      "matchImageUrl": "https://github.com/MachielRuby/engine_test/blob/main/02_luminance.jpg",
+      "matchImageUrl": "/image-targets/02/02_luminance.jpg",
       "metadataUrl": "/image-targets/02/02.json",
       "modelUrl": "/models/02.glb",
       "referenceSize": {
