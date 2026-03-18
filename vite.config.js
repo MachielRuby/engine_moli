@@ -9,8 +9,9 @@ export default defineConfig({
     outDir: 'dist',
     rollupOptions: {
       input: {
-        main: 'index.html',
-        moni: 'moni.html',
+        main:         'index.html',
+        moni:         'moni.html',
+        moni_content: 'moni_content.html',
       },
     },
     // 静态资源不做 base64 内联
